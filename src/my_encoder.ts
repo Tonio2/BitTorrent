@@ -4,6 +4,8 @@ type BencodeValue =
   | BencodeValue[]
   | { [key: string]: BencodeValue };
 
+const decoder = new TextDecoder("utf-8");
+
 export const decode = (buffer: Buffer): any => {
   let index = 0;
 
@@ -33,13 +35,19 @@ export const decode = (buffer: Buffer): any => {
     return number;
   }
 
-  function parseString(): string {
+  function parseString(asBuffer = false): string | Buffer {
     let colon = buffer.indexOf(58, index); // trouver ':'
     let length = parseInt(buffer.toString("ascii", index, colon));
     index = colon + 1;
-    let string = buffer.toString("utf-8", index, index + length);
-    index += length;
-    return string;
+    if (asBuffer) {
+      let data = buffer.slice(index, index + length);
+      index += length;
+      return data;
+    } else {
+      let string = buffer.slice(index, index + length).toString("utf-8");
+      index += length;
+      return string;
+    }
   }
 
   function parseList(): any[] {
@@ -58,8 +66,9 @@ export const decode = (buffer: Buffer): any => {
     let dict: Record<string, any> = {};
     while (buffer[index] !== 101) {
       // jusqu'à 'e'
-      let key = parseString();
-      dict[key] = parse();
+      let key = parseString() as string;
+      let isPiecesKey = key === "pieces";
+      dict[key] = isPiecesKey ? parseString(true) : parse();
     }
     index++; // passer 'e'
     return dict;
@@ -68,24 +77,33 @@ export const decode = (buffer: Buffer): any => {
   return parse();
 };
 
-export const encode = (value: BencodeValue): string => {
+export const encode = (value: BencodeValue): Buffer => {
   if (typeof value === "number") {
-    return `i${value}e`;
+    return Buffer.from(`i${value}e`, "utf-8");
   } else if (typeof value === "string") {
     const buffer = Buffer.from(value, "utf-8");
-    return `${buffer.length}:${value}`;
+    const length = Buffer.from(`${buffer.length}:`, "utf-8");
+    return Buffer.concat([length, buffer]);
+  } else if (Buffer.isBuffer(value)) {
+    // Directly handle Buffer objects
+    const length = Buffer.from(`${value.length}:`, "utf-8");
+    return Buffer.concat([length, value]);
   } else if (Array.isArray(value)) {
-    return `l${value.map(encode).join("")}e`;
+    const encodedValues = value.map(encode);
+    const encodedList = Buffer.concat(encodedValues);
+    return Buffer.concat([Buffer.from("l"), encodedList, Buffer.from("e")]);
   } else if (typeof value === "object" && value !== null) {
     const keys = Object.keys(value).sort((a, b) => {
-      // Sort the keys as byte strings
       const bufferA = Buffer.from(a, "utf-8");
       const bufferB = Buffer.from(b, "utf-8");
       return bufferA.compare(bufferB);
-    }); // Bencode requires dictionary keys to be sorted
-    return `d${keys
-      .map((key) => `${encode(key)}${encode(value[key])}`)
-      .join("")}e`;
+    });
+    const encodedDict = keys.reduce((acc, key) => {
+      const encodedKey = encode(key);
+      const encodedValue = encode(value[key]);
+      return Buffer.concat([acc, encodedKey, encodedValue]);
+    }, Buffer.from("d"));
+    return Buffer.concat([encodedDict, Buffer.from("e")]);
   } else {
     throw new Error("Unsupported data type");
   }
