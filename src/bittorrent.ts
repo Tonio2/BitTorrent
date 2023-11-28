@@ -2,7 +2,7 @@ import net from "net";
 import { Peer } from "../types";
 
 // Function to create the BitTorrent handshake message
-function createHandshake(infoHash: Buffer, peerId: string) {
+export function createHandshake(infoHash: Buffer, peerId: string) {
   const buffer = Buffer.alloc(68);
 
   // Protocol identifier length
@@ -24,33 +24,35 @@ function createHandshake(infoHash: Buffer, peerId: string) {
   return buffer;
 }
 
-// Function to connect to a peer and send the handshake
-export function connectToPeer(peer: Peer, infoHash: Buffer, peerId: string) {
-  const client = new net.Socket();
+export function sendInterested(client: net.Socket) {
+  const buffer = Buffer.alloc(5);
+  buffer.writeUInt32BE(1, 0); // Length prefix
+  buffer.writeUInt8(2, 4); // Message ID for 'interested'
+  client.write(buffer);
+}
 
-  client.connect(peer.port, peer.ip, () => {
-    console.log(`Connected to peer: ${peer.ip}:${peer.port}`);
-    const handshake = createHandshake(infoHash, peerId);
-    client.write(handshake);
-  });
+export function requestPiece(client: net.Socket, index, begin, length) {
+  const buffer = Buffer.alloc(17);
+  buffer.writeUInt32BE(13, 0); // Length prefix
+  buffer.writeUInt8(6, 4); // Message ID for 'request'
+  buffer.writeUInt32BE(index, 5);
+  buffer.writeUInt32BE(begin, 9);
+  buffer.writeUInt32BE(length, 13);
+  client.write(buffer);
+}
 
-  client.on("data", (data) => {
-    console.log(`Received: ${data}`);
-    // Handle response here
-  });
+export function isHandshakeValid(response: Buffer, infoHash: Buffer) {
+  if (response.length !== 68 || response.readUInt8(0) !== 19) {
+    return false;
+  }
 
-  client.on("error", (err) => {
-    console.error(
-      `Connection error with peer ${peer.ip}:${peer.port} - ${err.message}`
-    );
-		console.error(err);
-  });
+  const protocol = response.toString("utf8", 1, 20);
+  if (protocol !== "BitTorrent protocol") {
+    return false;
+  }
 
-  client.on("close", (hadError) => {
-    if (hadError) {
-      console.log(`Connection closed with error: ${peer.ip}:${peer.port}`);
-    } else {
-      console.log(`Connection closed gracefully: ${peer.ip}:${peer.port}`);
-    }
-  });
+  const responseInfoHash = response.slice(28, 48);
+  console.log("Response info hash:", responseInfoHash.toString("hex"));
+  console.log("Expected info hash:", infoHash.toString("hex"));
+  return infoHash.equals(responseInfoHash);
 }

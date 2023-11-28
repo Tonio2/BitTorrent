@@ -42,6 +42,7 @@ function sendAnnounceRequest(
   // Port
   announceRequest.writeUInt16BE(port, 96);
 
+  console.log("Sending announce request to ", url.hostname, ":", url.port);
   socket.send(
     announceRequest,
     0,
@@ -89,6 +90,7 @@ export async function contactUDPTracker(
   port: number
 ): Promise<Peer[]> {
   return new Promise((resolve, reject) => {
+    console.log("Creating socket for ", trackerUrl);
     const socket = dgram.createSocket("udp4");
     const url = new URL(trackerUrl);
 
@@ -99,11 +101,17 @@ export async function contactUDPTracker(
     connectRequest.writeUInt32BE(0, 8); // Action (0 for connect)
     transactionId.copy(connectRequest, 12); // Transaction ID
 
+    const timeout = setTimeout(() => {
+      console.error("Timeout while contacting tracker:", trackerUrl);
+      socket.close();
+      reject(new Error("Tracker request timeout"));
+    }, 5000);
+
     socket.on("message", (response) => {
       const action = response.readUInt32BE(0);
 
       if (action === 0) {
-        // Connect response
+        // Connect response)
         const connectionId = response.slice(8, 16);
         sendAnnounceRequest(
           socket,
@@ -117,12 +125,22 @@ export async function contactUDPTracker(
         );
       } else if (action === 1) {
         // Announce response
+        console.log("Received announce response from tracker ", trackerUrl);
         const peers = handleAnnounceResponse(response);
         socket.close(); // Close the socket after resolving
+        clearTimeout(timeout);
         resolve(peers);
       }
     });
 
+    socket.on("error", (err) => {
+      clearTimeout(timeout); // Clear the timeout on error
+      console.error("Error with socket [", trackerUrl, "]: ", err);
+      socket.close();
+      reject(err);
+    });
+
+    console.log("Sending connect request to ", url.hostname, ":", url.port);
     socket.send(
       connectRequest,
       0,
